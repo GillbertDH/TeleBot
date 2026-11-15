@@ -1,80 +1,37 @@
-import json
-import os
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urlparse, parse_qs
+name: KNU 공지 알림
 
-URL = "https://aicollege.knu.ac.kr/bbs/board.php?bo_table=sub6_1_a&lang=kor"
-SEEN_FILE = "seen.json"
-TOKEN = os.environ["TELEGRAM_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
 
+permissions:
+  contents: write
 
-def fetch_posts():
-    headers = {"User-Agent": "Mozilla/5.0"}
-    res = requests.get(URL, headers=headers, timeout=10)
-    res.raise_for_status()
-    soup = BeautifulSoup(res.text, "html.parser")
-    posts = []
-    for a in soup.select("td.td_subject a"):
-        link = a["href"]
-        query = parse_qs(urlparse(link).query)
-        if "wr_id" not in query:
-            continue
-        posts.append({
-            "id": query["wr_id"][0],
-            "title": a.get_text(strip=True),
-            "link": link,
-        })
-    return posts
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 내 코드 가져오기
+        uses: actions/checkout@v4
 
+      - name: 파이썬 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-def load_seen():
-    if not os.path.exists(SEEN_FILE):
-        return None
-    with open(SEEN_FILE, encoding="utf-8") as f:
-        return set(json.load(f))
+      - name: 라이브러리 설치
+        run: pip install -r requirements.txt
 
+      - name: 봇 실행
+        run: python bot.py
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-def save_seen(ids):
-    with open(SEEN_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(ids), f, indent=2)
-
-
-def send_telegram(text):
-    """보내기에 성공하면 True, 실패하면 False를 돌려준다"""
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    try:
-        res = requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=10)
-        return res.ok
-    except requests.RequestException:
-        return False
-
-
-def main():
-    posts = fetch_posts()
-    seen = load_seen()
-
-    if seen is None:
-        save_seen({p["id"] for p in posts})
-        print(f"첫 실행: 공지 {len(posts)}개를 본 글로 저장했어요.")
-        return
-
-    new_posts = [p for p in posts if p["id"] not in seen]
-    new_posts.reverse()  # 오래된 글부터 보내기
-
-    for p in new_posts:
-        message = f"📢 새 공지\n\n{p['title']}\n\n{p['link']}"
-        if send_telegram(message):
-            seen.add(p["id"])  # 성공한 글만 본 글로 기록
-            print("보냄:", p["title"])
-        else:
-            print("전송 실패 (다음에 다시 시도):", p["title"])
-
-    save_seen(seen)
-    if not new_posts:
-        print("새 공지 없음")
-
-
-if __name__ == "__main__":
-    main()
+      - name: seen.json 저장하기
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen.json
+          git diff --cached --quiet || (git commit -m "seen.json 업데이트" && git push)
